@@ -123,8 +123,8 @@ def format_duration(seconds):
 # Model initialize: #
 #####################
 if __name__ == '__main__':
-    if not os.path.exists(c.MODEL_PATH):
-        os.makedirs(c.MODEL_PATH)
+    if not os.path.exists(c.MODEL_PATH_1):
+        os.makedirs(c.MODEL_PATH_1)
 
     log_to_file(
         f"=== Config: Validation every {c.val_freq} epoch(s), Saving Checkpoint every {c.save_freq} epoch(s) ===")
@@ -150,11 +150,11 @@ if __name__ == '__main__':
     start_epoch = c.trained_epoch
     # 加载逻辑
     if c.tain_next:
-        latest_path = os.path.join(c.MODEL_PATH, 'model_checkpoint_00610.pt')
+        latest_path = os.path.join(c.MODEL_PATH_1, 'model_checkpoint_00610.pt')
         if os.path.exists(latest_path):
             start_epoch = load(latest_path)  # 接收返回的 epoch
         else:
-            start_epoch = load(c.MODEL_PATH + c.suffix)  # 接收返回的 epoch
+            start_epoch = load(c.MODEL_PATH_1 + c.suffix)  # 接收返回的 epoch
 
     for param_group in optim.param_groups:
         if 'initial_lr' not in param_group:
@@ -387,8 +387,12 @@ if __name__ == '__main__':
                                     'net': net.state_dict(),
                                     'epoch': i_epoch,
                                     'best_psnr': best_psnr},
-                                   os.path.join(c.MODEL_PATH, 'model_best.pt'))
-                        log_to_file(f"    [Info] Saved Best Model (PSNR: {best_psnr:.4f})")
+                                   os.path.join(c.MODEL_PATH_1, 'model_best.pt'))
+                        log_to_file(
+                            f"    [Info] Saved Best Model "
+                            f"(Validation C-S1: {avg_val_psnr_c:.2f} dB | "
+                            f"S1-R1: {avg_val_psnr_s:.2f} dB)"
+                        )
 
             # 构造与多阶段脚本一致的分行训练日志。
             # 当前文件是单阶段 train_1，因此仅输出 G1/R1/LF1/Z1、C-S1/S1-R1 和 Stage1。
@@ -423,7 +427,7 @@ if __name__ == '__main__':
 
             # --- 保存 Checkpoint (使用 save_interval) ---
             if i_epoch > 0 and (i_epoch % c.save_freq) == 0:
-                save_name = c.MODEL_PATH + 'model_checkpoint_%.5i' % i_epoch + '.pt'
+                save_name = c.MODEL_PATH_1 + 'model_checkpoint_%.5i' % i_epoch + '.pt'
                 torch.save({'opt': optim.state_dict(),
                             'net': net.state_dict(),
                             'epoch': i_epoch}, save_name)
@@ -433,12 +437,12 @@ if __name__ == '__main__':
             torch.save({'opt': optim.state_dict(),
                         'net': net.state_dict(),
                         'epoch': i_epoch},
-                       os.path.join(c.MODEL_PATH, 'model_latest.pt'))
+                       os.path.join(c.MODEL_PATH_1, 'model_latest.pt'))
 
             weight_scheduler.step()
 
         torch.save({'opt': optim.state_dict(),
-                    'net': net.state_dict()}, c.MODEL_PATH + 'model_final.pt')
+                    'net': net.state_dict()}, c.MODEL_PATH_1 + 'model_final.pt')
 
         writer.close()
 
@@ -446,7 +450,7 @@ if __name__ == '__main__':
         log_to_file(f"Error occurred: {e}")
         if c.checkpoint_on_error:
             torch.save({'opt': optim.state_dict(),
-                        'net': net.state_dict()}, c.MODEL_PATH + 'model_ABORT.pt')
+                        'net': net.state_dict()}, c.MODEL_PATH_1 + 'model_ABORT.pt')
         raise
 
     finally:
