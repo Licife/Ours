@@ -172,17 +172,6 @@ if __name__ == '__main__':
 
         for i_epoch in range(start_epoch + 1, c.epochs + 1):
             # i_epoch = i_epoch + c.trained_epoch + 1
-
-            if i_epoch <= c.warmup_epochs:
-                # 线性增长公式：lr = start_lr + (target_lr - start_lr) * (current_epoch / warmup_epochs)
-                warmup_lr = start_lr + (target_lr - start_lr) * (i_epoch / c.warmup_epochs)
-
-                # 手动更新优化器中的学习率
-                for param_group in optim.param_groups:
-                    param_group['lr'] = warmup_lr
-
-                print(f"==> [Warmup] Epoch {i_epoch}: LR set to {warmup_lr:.2e}")
-
             epoch_start_time = time.time()
             epoch_start_datetime = datetime.datetime.now()
 

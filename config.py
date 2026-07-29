@@ -3,8 +3,7 @@ clamp = 2.0
 channels_in = 3
 log10_lr = -4.0
 lr = 10 ** log10_lr
-warmup_epochs = 10
-epochs = 1000 + warmup_epochs
+epochs = 1500
 weight_decay = 1e-5
 init_scale = 0.01
 
@@ -16,8 +15,8 @@ lamda_alm = 1
 device_ids = [0]
 
 # Train:
-batch_size = 4
-cropsize = 256
+batch_size = 9
+cropsize = 128
 betas = (0.5, 0.999)
 weight_step = 200
 gamma = 0.5
@@ -25,7 +24,7 @@ gamma = 0.5
 # Val:
 cropsize_val = 1024
 # cropsize_val = 256 # DIV2K use 1024, ImageNet and COCO use 256
-batchsize_val = 2
+batchsize_val = 3
 shuffle_val = False
 val_freq = 50
 save_freq = 10
@@ -42,7 +41,7 @@ trained_epoch = 0
 # Dataset DIV2K
 VAL_PATH = r'D:/Datasets/DIV2K/DIV2K_valid_HR'
 format_val = 'png'
-IMAGE_PATH = 'image/'
+IMAGE_PATH = 'image1/'
 IMAGE_PATH_cover = IMAGE_PATH + 'cover_d/'
 IMAGE_PATH_secret = IMAGE_PATH + 'secret_d/'
 IMAGE_PATH_steg = IMAGE_PATH + 'steg_d/'
@@ -53,7 +52,7 @@ IMAGE_PATH_resi_secret = IMAGE_PATH + 'resi_s_d/'
 # Dataset COCO
 # VAL_PATH = r'D:/Datasets/COCO2017/val2017'
 # format_val = 'jpg'
-# IMAGE_PATH = 'image/'
+# IMAGE_PATH = 'image1/'
 # IMAGE_PATH_cover = IMAGE_PATH + 'cover_c/'
 # IMAGE_PATH_secret = IMAGE_PATH + 'secret_c/'
 # IMAGE_PATH_steg = IMAGE_PATH + 'steg_c/'
@@ -64,7 +63,7 @@ IMAGE_PATH_resi_secret = IMAGE_PATH + 'resi_s_d/'
 # Dataset ImageNet
 # VAL_PATH = r'D:/Datasets/ImageNET/train'
 # format_val = 'JPEG'
-# IMAGE_PATH = 'image/'
+# IMAGE_PATH = 'image1/'
 # IMAGE_PATH_cover = IMAGE_PATH + 'cover_i/'
 # IMAGE_PATH_secret = IMAGE_PATH + 'secret_i/'
 # IMAGE_PATH_steg = IMAGE_PATH + 'steg_i/'
@@ -83,7 +82,9 @@ progress_bar = False
 # Saving checkpoints:
 LOG_PATH = 'log/'
 
-MODEL_PATH = 'model/'
+MODEL_PATH_1 = 'model1/'
+MODEL_PATH_2 = 'model2/'
+MODEL_PATH_3 = 'model3/'
 checkpoint_on_error = True
 SAVE_freq = 50
 

@@ -7,11 +7,11 @@ from natsort import natsorted
 
 
 def main():
-    folder_GT = r'D:/Reference_code/Journal_Ala/image/cover_d'
-    folder_Gen = r'D:/Reference_code/Journal_Ala/image/steg_d'
+    # folder_GT = r'D:/Reference_code/ABINN_End/image1/cover_i'
+    # folder_Gen = r'D:/Reference_code/ABINN_End/image1/steg_i'
 
-    # folder_GT = r'D:/Reference_code/Journal_Ala/image/secret_d'
-    # folder_Gen = r'D:/Reference_code/Journal_Ala/image/secret-rev_d'
+    folder_GT = r'D:/Reference_code/ABINN_End/image1/secret_i'
+    folder_Gen = r'D:/Reference_code/ABINN_End/image1/secret-rev_i'
 
     APD_all = []
     RMSE_all = []
@@ -33,7 +33,7 @@ def main():
             i + 1, base_name, APD, RMSE))
         APD_all.append(APD)
         RMSE_all.append(RMSE)
-    print('Average: APD: {:.6f} , RMSE: {:.6f}'.format(
+    print('Average: MAE: {:.6f} , RMSE: {:.6f}'.format(
         sum(APD_all) / len(APD_all),
         sum(RMSE_all) / len(RMSE_all)))
 

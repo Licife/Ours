@@ -83,29 +83,6 @@ class ResidualDenseBlock_out_CE(nn.Module):
         x5 = self.conv5(x)
         return x5
 
-# class ResidualDenseBlock_out_CE(nn.Module):
-#     def __init__(self, input, output, bias=True):
-#         super(ResidualDenseBlock_out_CE, self).__init__()
-#         self.conv1 = nn.Conv2d(input, 32, 3, 1, 1, bias=bias)
-#         self.conv2 = nn.Conv2d(input + 32, 32, 3, 1, 1, bias=bias)
-#         self.conv3 = nn.Conv2d(input + 2 * 32, 32, 3, 1, 1, bias=bias)
-#         self.conv4 = nn.Conv2d(input + 3 * 32, 32, 3, 1, 1, bias=bias)
-#         self.conv5 = nn.Conv2d(input + 4 * 32, output, 3, 1, 1, bias=bias)
-#         self.lrelu = nn.LeakyReLU(inplace=True)
-#         self.attention = SpatialAttention_CBAM()
-#         # initialization
-#         mutil.initialize_weights([self.conv5], 0.)
-#
-#     def forward(self, x):
-#         x1 = self.lrelu(self.conv1(x))
-#         x2 = self.lrelu(self.conv2(torch.cat((x, x1), 1)))
-#         x3 = self.lrelu(self.conv3(torch.cat((x, x1, x2), 1)))
-#         x4 = self.lrelu(self.conv4(torch.cat((x, x1, x2, x3), 1)))
-#         x = self.attention(torch.cat((x, x1, x2, x3, x4), 1))
-#         x5 = self.conv5(x)
-#         return x5
-
-
 # OSA
 class ResidualDenseBlock_out_SE(nn.Module):
     def __init__(self, input, output, bias=True):
@@ -131,28 +108,3 @@ class ResidualDenseBlock_out_SE(nn.Module):
         x = self.attention(torch.cat((x, x1, x2, x3, x4), 1))
         x5 = self.conv5(x)
         return x5
-
-# class ResidualDenseBlock_out_SE(nn.Module):
-#     def __init__(self, input, output, bias=True):
-#         super(ResidualDenseBlock_out_SE, self).__init__()
-#
-#         gc = 32
-#
-#         self.conv1 = nn.Conv2d(input, gc, 3, 1, 1, bias=bias)
-#         self.conv2 = nn.Conv2d(gc, gc, 3, 1, 1, bias=bias)
-#         self.conv3 = nn.Conv2d(gc, gc, 3, 1, 1, bias=bias)
-#         self.conv4 = nn.Conv2d(gc, gc, 3, 1, 1, bias=bias)
-#         self.conv5 = nn.Conv2d(input + 4 * gc, output, 3, 1, 1, bias=bias)
-#         self.lrelu = nn.LeakyReLU(inplace=True)
-#         self.attention = SpatialAttention_CBAM()
-#         # initialization
-#         mutil.initialize_weights([self.conv5], 0.)
-#
-#     def forward(self, x):
-#         x1 = self.lrelu(self.conv1(x))
-#         x2 = self.lrelu(self.conv2(x1))
-#         x3 = self.lrelu(self.conv3(x2))
-#         x4 = self.lrelu(self.conv4(x3))
-#         x = self.attention(torch.cat((x, x1, x2, x3, x4), 1))
-#         x5 = self.conv5(x)
-#         return x5

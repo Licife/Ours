@@ -14,11 +14,11 @@ def main():
 
     # GT - Ground-truth;
     # Gen: Generated / Restored / Recovered images
-    # folder_GT = r'D:/Reference_code/Journal_Ala/image/cover_d'
-    # folder_Gen = r'D:/Reference_code/Journal_Ala/image/steg_d'
+    # folder_GT = r'D:/Reference_code/ABINN_End/image1/cover_i'
+    # folder_Gen = r'D:/Reference_code/ABINN_End/image1/steg_i'
     #
-    folder_GT = r'D:/Reference_code/Journal_Ala/image/secret_d'
-    folder_Gen = r'D:/Reference_code/Journal_Ala/image/secret-rev_d'
+    folder_GT = r'D:/Reference_code/ABINN_End/image1/secret_i'
+    folder_Gen = r'D:/Reference_code/ABINN_End/image1/secret-rev_i'
     crop_border = 1
     suffix = '_secret_rev'  # suffix for Gen images
     # test_Y = False  # True: test Y channel only; False: test RGB channels
@@ -73,8 +73,8 @@ def main():
         sum(PSNR_all) / len(PSNR_all),
         sum(SSIM_all) / len(SSIM_all)))
 
-    with open('1.txt', 'w') as f:
-        f.write(str(PSNR_all))
+    # with open('1.txt', 'w') as f:
+    #     f.write(str(PSNR_all))
 
 def calculate_psnr(img1, img2):
     # img1 and img2 have range [0, 255]

@@ -44,7 +44,7 @@ def computePSNR(origin,pred):
 
 if __name__ == '__main__':
     print('Start testing...')
-    net = Model()
+    net = Model_1()
     net.cuda()
     init_model(net)
     net = torch.nn.DataParallel(net, device_ids=c.device_ids)
@@ -52,7 +52,7 @@ if __name__ == '__main__':
     optim = torch.optim.Adam(params_trainable, lr=c.lr, betas=c.betas, eps=1e-6, weight_decay=c.weight_decay)
     # weight_scheduler = torch.optim.lr_scheduler.StepLR(optim, c.weight_step, gamma=c.gamma)
 
-    load(c.MODEL_PATH + c.suffix)
+    load(c.MODEL_PATH_1 + c.suffix)
 
     net.eval()
 
