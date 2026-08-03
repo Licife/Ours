@@ -89,15 +89,15 @@ if __name__ == '__main__':
             secret_rev = iwt(secret_rev)
             cover_rev = bacward_img.narrow(1, 0, 4 * c.channels_in)
             cover_rev = iwt(cover_rev)
-            resi_cover = (steg_img - cover) * 20
-            resi_secret = (secret_rev - secret) * 20
+            resi_cover = (steg_img - cover) * c.residual_scale
+            resi_secret = (secret_rev - secret) * c.residual_scale
 
-            torchvision.utils.save_image(cover, c.IMAGE_PATH_cover + '%.5d.png' % i)
-            torchvision.utils.save_image(secret, c.IMAGE_PATH_secret + '%.5d.png' % i)
-            torchvision.utils.save_image(steg_img, c.IMAGE_PATH_steg + '%.5d.png' % i)
-            torchvision.utils.save_image(secret_rev, c.IMAGE_PATH_secret_rev + '%.5d.png' % i)
+            # torchvision.utils.save_image(cover, c.IMAGE_PATH_cover + '%.5d.png' % i)
+            # torchvision.utils.save_image(secret, c.IMAGE_PATH_secret + '%.5d.png' % i)
+            # torchvision.utils.save_image(steg_img, c.IMAGE_PATH_steg + '%.5d.png' % i)
+            # torchvision.utils.save_image(secret_rev, c.IMAGE_PATH_secret_rev + '%.5d.png' % i)
 
-            if i < 0:
+            if c.residual:
                 torchvision.utils.save_image(resi_cover, c.IMAGE_PATH_resi_cover + '%.5d.png' % i)
                 torchvision.utils.save_image(resi_secret, c.IMAGE_PATH_resi_secret + '%.5d.png' % i)
                 print(f'Saved residuals for image {i}')

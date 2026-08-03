@@ -7,11 +7,17 @@ from natsort import natsorted
 
 
 def main():
-    # folder_GT = r'D:/Reference_code/ABINN_End/image1/cover_i'
-    # folder_Gen = r'D:/Reference_code/ABINN_End/image1/steg_i'
+    folder_GT = r'D:/Reference_code/ABINN_End/image1/cover_i'
+    folder_Gen = r'D:/Reference_code/ABINN_End/image1/steg_i'
+    #
+    # folder_GT = r'D:/Reference_code/ABINN_End/image1/secret_i'
+    # folder_Gen = r'D:/Reference_code/ABINN_End/image1/secret-rev_i'
 
-    folder_GT = r'D:/Reference_code/ABINN_End/image1/secret_i'
-    folder_Gen = r'D:/Reference_code/ABINN_End/image1/secret-rev_i'
+    # folder_GT = r'D:/Reference_code/ABINN_End/image2/cover_i'
+    # folder_Gen = r'D:/Reference_code/ABINN_End/image2/steg_2_i'
+    #
+    # folder_GT = r'D:/Reference_code/ABINN_End/image2/secret_2_i'
+    # folder_Gen = r'D:/Reference_code/ABINN_End/image2/secret-rev_2_i'
 
     APD_all = []
     RMSE_all = []

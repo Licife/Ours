@@ -14,11 +14,18 @@ def main():
 
     # GT - Ground-truth;
     # Gen: Generated / Restored / Recovered images
-    # folder_GT = r'D:/Reference_code/ABINN_End/image1/cover_i'
-    # folder_Gen = r'D:/Reference_code/ABINN_End/image1/steg_i'
+    folder_GT = r'D:/Reference_code/ABINN_End/image4/cover'
+    folder_Gen = r'D:/Reference_code/ABINN_End/image4/steg_1'
+
+    # folder_GT = r'D:/Reference_code/ABINN_End/image4/secret_1'
+    # folder_Gen = r'D:/Reference_code/ABINN_End/image4/secret-rev_1'
+
+    # folder_GT = r'D:/Reference_code/ABINN_End/image2/cover_i'
+    # folder_Gen = r'D:/Reference_code/ABINN_End/image2/steg_2_i'
     #
-    folder_GT = r'D:/Reference_code/ABINN_End/image1/secret_i'
-    folder_Gen = r'D:/Reference_code/ABINN_End/image1/secret-rev_i'
+    # folder_GT = r'D:/Reference_code/ABINN_End/image2/secret_2_i'
+    # folder_Gen = r'D:/Reference_code/ABINN_End/image2/secret-rev_2_i'
+
     crop_border = 1
     suffix = '_secret_rev'  # suffix for Gen images
     # test_Y = False  # True: test Y channel only; False: test RGB channels

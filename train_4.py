@@ -1,0 +1,441 @@
+#!/usr/bin/env python
+import datetime
+import math
+import os
+import time
+import warnings
+
+import lpips
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optimi
+from pytorch_msssim import ssim
+from tqdm import tqdm
+
+import config as c
+import datasets
+import modules.Unet_common as common
+from model import Model_1, Model_2, Model_3, Model_4, init_model
+
+warnings.filterwarnings("ignore")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+class StarINNLoss(nn.Module):
+    def __init__(self, alpha_lpips=0.2, alpha_cssim=0.84):
+        super(StarINNLoss, self).__init__()
+        self.alpha_lpips = alpha_lpips
+        self.alpha_cssim = alpha_cssim
+        self.lpips_model = lpips.LPIPS(net="vgg").eval()
+        for param in self.lpips_model.parameters():
+            param.requires_grad = False
+
+    def hybrid_losses(self, pairs):
+        preds = torch.cat([pred for pred, _ in pairs], dim=0)
+        targets = torch.cat([target for _, target in pairs], dim=0)
+        preds_scaled = torch.clamp(preds * 2.0 - 1.0, min=-1.0, max=1.0)
+        targets_scaled = torch.clamp(targets * 2.0 - 1.0, min=-1.0, max=1.0)
+        lpips_values = self.lpips_model(preds_scaled, targets_scaled).reshape(preds.shape[0], -1).mean(dim=1)
+
+        losses = []
+        start = 0
+        for pred, target in pairs:
+            batch_size = pred.shape[0]
+            loss_l1 = F.l1_loss(pred, target, reduction="mean")
+            loss_lpips = lpips_values[start:start + batch_size].mean()
+            losses.append(((1.0 - self.alpha_lpips) * loss_l1 + self.alpha_lpips * loss_lpips) * pred.numel())
+            start += batch_size
+        return losses
+
+    def low_freq_loss(self, pred_low, target_low):
+        loss_l1 = F.l1_loss(pred_low, target_low, reduction="mean")
+        loss_cssim = 1.0 - ssim(pred_low, target_low, data_range=2.0, size_average=True)
+        return (self.alpha_cssim * loss_cssim + (1.0 - self.alpha_cssim) * loss_l1) * pred_low.numel()
+
+
+def calculate_alm_loss(output_z, z_pred):
+    return F.l1_loss(output_z, z_pred, reduction="sum")
+
+
+def get_parameter_number(net):
+    total_num = sum(param.numel() for param in net.parameters())
+    trainable_num = sum(param.numel() for param in net.parameters() if param.requires_grad)
+    return {"Total": total_num, "Trainable": trainable_num}
+
+
+def computePSNR(origin, pred):
+    origin = np.asarray(origin, dtype=np.float32)
+    pred = np.asarray(pred, dtype=np.float32)
+    mse = np.mean((origin - pred) ** 2)
+    if mse < 1.0e-10:
+        return 100.0
+    return 10.0 * math.log10((255.0 ** 2) / mse)
+
+
+def tensor_psnr(origin, pred):
+    origin_np = np.clip(origin.detach().cpu().numpy() * 255.0, 0.0, 255.0)
+    pred_np = np.clip(pred.detach().cpu().numpy() * 255.0, 0.0, 255.0)
+    return computePSNR(origin_np, pred_np)
+
+
+def split_five(data):
+    if data.shape[0] % 5 != 0:
+        raise ValueError(f"The batch size must be divisible by 5 for cover and four secret images, but got {data.shape[0]}.")
+    group_size = data.shape[0] // 5
+    cover = data[:group_size]
+    secret_1 = data[group_size:2 * group_size]
+    secret_2 = data[2 * group_size:3 * group_size]
+    secret_3 = data[3 * group_size:4 * group_size]
+    secret_4 = data[4 * group_size:5 * group_size]
+    return cover, secret_1, secret_2, secret_3, secret_4
+
+
+def format_duration(seconds):
+    seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def log_to_file(message):
+    print(message)
+    with open(os.path.join(c.LOG_PATH, "train_4_log.txt"), "a+", encoding="utf-8") as file:
+        file.write(message + "\n")
+
+
+def save_model(path, net, optimizer, epoch, best_psnr=None):
+    state = {"opt": optimizer.state_dict(), "net": net.state_dict(), "epoch": epoch}
+    if best_psnr is not None:
+        state["best_psnr"] = best_psnr
+    torch.save(state, path)
+
+
+def load_model(path, net, optimizer):
+    print(f"Loading checkpoint: {path}")
+    state_dicts = torch.load(path, map_location=device, weights_only=False)
+    network_state_dict = {key: value for key, value in state_dicts["net"].items() if "tmp_var" not in key}
+    net.load_state_dict(network_state_dict)
+    try:
+        optimizer.load_state_dict(state_dicts["opt"])
+    except Exception:
+        print("Cannot load optimizer for some reason or other")
+    return int(state_dicts.get("epoch", 0)), float(state_dicts.get("best_psnr", 0.0))
+
+
+if __name__ == "__main__":
+    os.makedirs(c.MODEL_PATH_4, exist_ok=True)
+    os.makedirs(c.LOG_PATH, exist_ok=True)
+    log_to_file(f"=== Config: Validation every {c.val_freq} epoch(s), Saving Checkpoint every {c.save_freq} epoch(s) ===")
+
+    net1 = Model_1().to(device)
+    net2 = Model_2().to(device)
+    net3 = Model_3().to(device)
+    net4 = Model_4().to(device)
+    init_model(net1)
+    init_model(net2)
+    init_model(net3)
+    init_model(net4)
+
+    net1 = torch.nn.DataParallel(net1, device_ids=c.device_ids)
+    net2 = torch.nn.DataParallel(net2, device_ids=c.device_ids)
+    net3 = torch.nn.DataParallel(net3, device_ids=c.device_ids)
+    net4 = torch.nn.DataParallel(net4, device_ids=c.device_ids)
+
+    print("Stage 1:", get_parameter_number(net1))
+    print("Stage 2:", get_parameter_number(net2))
+    print("Stage 3:", get_parameter_number(net3))
+    print("Stage 4:", get_parameter_number(net4))
+
+    optim1 = torch.optim.Adam(list(filter(lambda param: param.requires_grad, net1.parameters())), lr=c.lr, betas=c.betas, eps=1e-6, weight_decay=c.weight_decay)
+    optim2 = torch.optim.Adam(list(filter(lambda param: param.requires_grad, net2.parameters())), lr=c.lr, betas=c.betas, eps=1e-6, weight_decay=c.weight_decay)
+    optim3 = torch.optim.Adam(list(filter(lambda param: param.requires_grad, net3.parameters())), lr=c.lr, betas=c.betas, eps=1e-6, weight_decay=c.weight_decay)
+    optim4 = torch.optim.Adam(list(filter(lambda param: param.requires_grad, net4.parameters())), lr=c.lr, betas=c.betas, eps=1e-6, weight_decay=c.weight_decay)
+
+    start_epoch = c.trained_epoch
+    best_psnr = 0.0
+
+    if c.tain_next:
+        epoch_1, best_psnr_1 = load_model(os.path.join(c.MODEL_PATH_4, "model_checkpoint_00050_1.pt"), net1, optim1)
+        epoch_2, best_psnr_2 = load_model(os.path.join(c.MODEL_PATH_4, "model_checkpoint_00050_2.pt"), net2, optim2)
+        epoch_3, best_psnr_3 = load_model(os.path.join(c.MODEL_PATH_4, "model_checkpoint_00050_3.pt"), net3, optim3)
+        epoch_4, best_psnr_4 = load_model(os.path.join(c.MODEL_PATH_4, "model_checkpoint_00050_4.pt"), net4, optim4)
+        if len({epoch_1, epoch_2, epoch_3, epoch_4}) != 1:
+            raise RuntimeError(f"The four latest checkpoints have different epochs: {epoch_1}, {epoch_2}, {epoch_3} and {epoch_4}.")
+        start_epoch = epoch_1
+        best_psnr = max(best_psnr_1, best_psnr_2, best_psnr_3, best_psnr_4)
+
+    manual_lr = 1e-5
+
+    for optimizer in (optim1, optim2, optim3):
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = manual_lr
+            param_group["initial_lr"] = manual_lr
+
+    # for optimizer in (optim1, optim2, optim3, optim4):
+    #     for param_group in optimizer.param_groups:
+    #         if "initial_lr" not in param_group:
+    #             param_group["initial_lr"] = c.lr
+
+    remaining_epochs = max(c.epochs - start_epoch, 1)
+
+    scheduler1 = optimi.lr_scheduler.CosineAnnealingLR(optim1, T_max=remaining_epochs, eta_min=1e-7)
+    scheduler2 = optimi.lr_scheduler.CosineAnnealingLR(optim2, T_max=remaining_epochs, eta_min=1e-7)
+    scheduler3 = optimi.lr_scheduler.CosineAnnealingLR(optim3, T_max=remaining_epochs, eta_min=1e-7)
+    scheduler4 = optimi.lr_scheduler.CosineAnnealingLR(optim4, T_max=remaining_epochs, eta_min=1e-7)
+    #
+    # scheduler1 = optimi.lr_scheduler.CosineAnnealingLR(optim1, T_max=c.epochs, eta_min=1e-7, last_epoch=start_epoch)
+    # scheduler2 = optimi.lr_scheduler.CosineAnnealingLR(optim2, T_max=c.epochs, eta_min=1e-7, last_epoch=start_epoch)
+    # scheduler3 = optimi.lr_scheduler.CosineAnnealingLR(optim3, T_max=c.epochs, eta_min=1e-7, last_epoch=start_epoch)
+    # scheduler4 = optimi.lr_scheduler.CosineAnnealingLR(optim4, T_max=c.epochs, eta_min=1e-7, last_epoch=start_epoch)
+
+    dwt = common.DWT()
+    iwt = common.IWT()
+    loss_fn = StarINNLoss(alpha_lpips=0.2).to(device)
+    loss_fn.eval()
+
+    training_start_time = time.time()
+    completed_epoch_times = []
+
+    for i_epoch in range(start_epoch + 1, c.epochs + 1):
+        epoch_start_time = time.time()
+        epoch_start_datetime = datetime.datetime.now()
+
+        loss_history = []
+        g_history = [[], [], [], []]
+        r_history = [[], [], [], []]
+        lf_history = [[], [], [], []]
+        z_history = [[], [], [], []]
+        train_cover_psnr = [[], [], [], []]
+        train_secret_psnr = [[], [], [], []]
+
+        net1.train()
+        net2.train()
+        net3.train()
+        net4.train()
+        loop = tqdm(enumerate(datasets.trainloader), total=len(datasets.trainloader), leave=True)
+
+        for _, data in loop:
+            data = data.to(device)
+            cover, secret_1, secret_2, secret_3, secret_4 = split_five(data)
+
+            cover_dwt = dwt(cover)
+            secret_dwt_1 = dwt(secret_1)
+            secret_dwt_2 = dwt(secret_2)
+            secret_dwt_3 = dwt(secret_3)
+            secret_dwt_4 = dwt(secret_4)
+
+            output_dwt_1, z_pred_1 = net1(torch.cat((cover_dwt, secret_dwt_1), dim=1))
+            steg_dwt_1 = output_dwt_1.narrow(1, 0, 4 * c.channels_in)
+            z_dwt_1 = output_dwt_1.narrow(1, 4 * c.channels_in, output_dwt_1.shape[1] - 4 * c.channels_in)
+            steg_1 = iwt(steg_dwt_1)
+
+            output_dwt_2, z_pred_2 = net2(torch.cat((steg_dwt_1, secret_dwt_2), dim=1))
+            steg_dwt_2 = output_dwt_2.narrow(1, 0, 4 * c.channels_in)
+            z_dwt_2 = output_dwt_2.narrow(1, 4 * c.channels_in, output_dwt_2.shape[1] - 4 * c.channels_in)
+            steg_2 = iwt(steg_dwt_2)
+
+            output_dwt_3, z_pred_3 = net3(torch.cat((steg_dwt_2, secret_dwt_3), dim=1))
+            steg_dwt_3 = output_dwt_3.narrow(1, 0, 4 * c.channels_in)
+            z_dwt_3 = output_dwt_3.narrow(1, 4 * c.channels_in, output_dwt_3.shape[1] - 4 * c.channels_in)
+            steg_3 = iwt(steg_dwt_3)
+
+            output_dwt_4, z_pred_4 = net4(torch.cat((steg_dwt_3, secret_dwt_4), dim=1))
+            steg_dwt_4 = output_dwt_4.narrow(1, 0, 4 * c.channels_in)
+            z_dwt_4 = output_dwt_4.narrow(1, 4 * c.channels_in, output_dwt_4.shape[1] - 4 * c.channels_in)
+            steg_4 = iwt(steg_dwt_4)
+
+            reverse_dwt_4 = net4(steg_dwt_4, rev=True)
+            recovered_steg_dwt_3 = reverse_dwt_4.narrow(1, 0, 4 * c.channels_in)
+            recovered_secret_4 = iwt(reverse_dwt_4.narrow(1, 4 * c.channels_in, reverse_dwt_4.shape[1] - 4 * c.channels_in))
+
+            reverse_dwt_3 = net3(recovered_steg_dwt_3, rev=True)
+            recovered_steg_dwt_2 = reverse_dwt_3.narrow(1, 0, 4 * c.channels_in)
+            recovered_secret_3 = iwt(reverse_dwt_3.narrow(1, 4 * c.channels_in, reverse_dwt_3.shape[1] - 4 * c.channels_in))
+
+            reverse_dwt_2 = net2(recovered_steg_dwt_2, rev=True)
+            recovered_steg_dwt_1 = reverse_dwt_2.narrow(1, 0, 4 * c.channels_in)
+            recovered_secret_2 = iwt(reverse_dwt_2.narrow(1, 4 * c.channels_in, reverse_dwt_2.shape[1] - 4 * c.channels_in))
+
+            reverse_dwt_1 = net1(recovered_steg_dwt_1, rev=True)
+            recovered_secret_1 = iwt(reverse_dwt_1.narrow(1, 4 * c.channels_in, reverse_dwt_1.shape[1] - 4 * c.channels_in))
+
+            pairs = [(steg_1, cover), (steg_2, cover), (steg_3, cover), (steg_4, cover),
+                     (recovered_secret_1, secret_1), (recovered_secret_2, secret_2),
+                     (recovered_secret_3, secret_3), (recovered_secret_4, secret_4)]
+            g_loss_1, g_loss_2, g_loss_3, g_loss_4, r_loss_1, r_loss_2, r_loss_3, r_loss_4 = loss_fn.hybrid_losses(pairs)
+
+            cover_low = cover_dwt.narrow(1, 0, c.channels_in)
+            lf_loss_1 = loss_fn.low_freq_loss(steg_dwt_1.narrow(1, 0, c.channels_in), cover_low)
+            lf_loss_2 = loss_fn.low_freq_loss(steg_dwt_2.narrow(1, 0, c.channels_in), cover_low)
+            lf_loss_3 = loss_fn.low_freq_loss(steg_dwt_3.narrow(1, 0, c.channels_in), cover_low)
+            lf_loss_4 = loss_fn.low_freq_loss(steg_dwt_4.narrow(1, 0, c.channels_in), cover_low)
+
+            z_loss_1 = calculate_alm_loss(z_dwt_1, z_pred_1)
+            z_loss_2 = calculate_alm_loss(z_dwt_2, z_pred_2)
+            z_loss_3 = calculate_alm_loss(z_dwt_3, z_pred_3)
+            z_loss_4 = calculate_alm_loss(z_dwt_4, z_pred_4)
+
+            stage_1_loss = c.lamda_reconstruction * r_loss_1 + c.lamda_guide * g_loss_1 + c.lamda_low_frequency * lf_loss_1 + c.lamda_alm * z_loss_1
+            stage_2_loss = c.lamda_reconstruction * r_loss_2 + c.lamda_guide * g_loss_2 + c.lamda_low_frequency * lf_loss_2 + c.lamda_alm * z_loss_2
+            stage_3_loss = c.lamda_reconstruction * r_loss_3 + c.lamda_guide * g_loss_3 + c.lamda_low_frequency * lf_loss_3 + c.lamda_alm * z_loss_3
+            stage_4_loss = c.lamda_reconstruction * r_loss_4 + c.lamda_guide * g_loss_4 + c.lamda_low_frequency * lf_loss_4 + c.lamda_alm * z_loss_4
+            total_loss = stage_1_loss + stage_2_loss + stage_3_loss + stage_4_loss
+
+            optim1.zero_grad(set_to_none=True)
+            optim2.zero_grad(set_to_none=True)
+            optim3.zero_grad(set_to_none=True)
+            optim4.zero_grad(set_to_none=True)
+            total_loss.backward()
+            optim1.step()
+            optim2.step()
+            optim3.step()
+            optim4.step()
+
+            loss_history.append(total_loss.item())
+            for history, value in zip(g_history, [g_loss_1, g_loss_2, g_loss_3, g_loss_4]):
+                history.append(value.item())
+            for history, value in zip(r_history, [r_loss_1, r_loss_2, r_loss_3, r_loss_4]):
+                history.append(value.item())
+            for history, value in zip(lf_history, [lf_loss_1, lf_loss_2, lf_loss_3, lf_loss_4]):
+                history.append(value.item())
+            for history, value in zip(z_history, [z_loss_1, z_loss_2, z_loss_3, z_loss_4]):
+                history.append(value.item())
+
+            with torch.no_grad():
+                cover_psnr_values = [tensor_psnr(cover, steg_1), tensor_psnr(cover, steg_2), tensor_psnr(cover, steg_3), tensor_psnr(cover, steg_4)]
+                secret_psnr_values = [tensor_psnr(secret_1, recovered_secret_1), tensor_psnr(secret_2, recovered_secret_2), tensor_psnr(secret_3, recovered_secret_3), tensor_psnr(secret_4, recovered_secret_4)]
+                for history, value in zip(train_cover_psnr, cover_psnr_values):
+                    history.append(value)
+                for history, value in zip(train_secret_psnr, secret_psnr_values):
+                    history.append(value)
+
+            loop.set_description(f"Train Epoch [{i_epoch}/{c.epochs}]")
+            loop.set_postfix(Loss=f"{total_loss.item():.2f}", C_S4=f"{cover_psnr_values[3]:.2f}", S1_R1=f"{secret_psnr_values[0]:.2f}", S2_R2=f"{secret_psnr_values[1]:.2f}", S3_R3=f"{secret_psnr_values[2]:.2f}", S4_R4=f"{secret_psnr_values[3]:.2f}")
+
+        epoch_train_seconds = time.time() - epoch_start_time
+        completed_epoch_times.append(epoch_train_seconds)
+
+        avg_loss = float(np.mean(loss_history))
+        avg_g = [float(np.mean(history)) for history in g_history]
+        avg_r = [float(np.mean(history)) for history in r_history]
+        avg_lf = [float(np.mean(history)) for history in lf_history]
+        avg_z = [float(np.mean(history)) for history in z_history]
+        avg_train_cover = [float(np.mean(history)) for history in train_cover_psnr]
+        avg_train_secret = [float(np.mean(history)) for history in train_secret_psnr]
+
+        if i_epoch % c.val_freq == 0:
+            net1.eval()
+            net2.eval()
+            net3.eval()
+            net4.eval()
+            val_cover_psnr = [[], [], [], []]
+            val_secret_psnr = [[], [], [], []]
+
+            with torch.no_grad():
+                val_loop = tqdm(datasets.testloader, desc="Validating", leave=False)
+                for data in val_loop:
+                    data = data.to(device)
+                    cover, secret_1, secret_2, secret_3, secret_4 = split_five(data)
+
+                    cover_dwt = dwt(cover)
+                    secret_dwt_1 = dwt(secret_1)
+                    secret_dwt_2 = dwt(secret_2)
+                    secret_dwt_3 = dwt(secret_3)
+                    secret_dwt_4 = dwt(secret_4)
+
+                    output_dwt_1, _ = net1(torch.cat((cover_dwt, secret_dwt_1), dim=1))
+                    steg_dwt_1 = output_dwt_1.narrow(1, 0, 4 * c.channels_in)
+                    steg_1 = iwt(steg_dwt_1)
+
+                    output_dwt_2, _ = net2(torch.cat((steg_dwt_1, secret_dwt_2), dim=1))
+                    steg_dwt_2 = output_dwt_2.narrow(1, 0, 4 * c.channels_in)
+                    steg_2 = iwt(steg_dwt_2)
+
+                    output_dwt_3, _ = net3(torch.cat((steg_dwt_2, secret_dwt_3), dim=1))
+                    steg_dwt_3 = output_dwt_3.narrow(1, 0, 4 * c.channels_in)
+                    steg_3 = iwt(steg_dwt_3)
+
+                    output_dwt_4, _ = net4(torch.cat((steg_dwt_3, secret_dwt_4), dim=1))
+                    steg_dwt_4 = output_dwt_4.narrow(1, 0, 4 * c.channels_in)
+                    steg_4 = iwt(steg_dwt_4)
+
+                    reverse_dwt_4 = net4(steg_dwt_4, rev=True)
+                    recovered_steg_dwt_3 = reverse_dwt_4.narrow(1, 0, 4 * c.channels_in)
+                    recovered_secret_4 = iwt(reverse_dwt_4.narrow(1, 4 * c.channels_in, reverse_dwt_4.shape[1] - 4 * c.channels_in))
+
+                    reverse_dwt_3 = net3(recovered_steg_dwt_3, rev=True)
+                    recovered_steg_dwt_2 = reverse_dwt_3.narrow(1, 0, 4 * c.channels_in)
+                    recovered_secret_3 = iwt(reverse_dwt_3.narrow(1, 4 * c.channels_in, reverse_dwt_3.shape[1] - 4 * c.channels_in))
+
+                    reverse_dwt_2 = net2(recovered_steg_dwt_2, rev=True)
+                    recovered_steg_dwt_1 = reverse_dwt_2.narrow(1, 0, 4 * c.channels_in)
+                    recovered_secret_2 = iwt(reverse_dwt_2.narrow(1, 4 * c.channels_in, reverse_dwt_2.shape[1] - 4 * c.channels_in))
+
+                    reverse_dwt_1 = net1(recovered_steg_dwt_1, rev=True)
+                    recovered_secret_1 = iwt(reverse_dwt_1.narrow(1, 4 * c.channels_in, reverse_dwt_1.shape[1] - 4 * c.channels_in))
+
+                    cover_psnr_values = [tensor_psnr(cover, steg_1), tensor_psnr(cover, steg_2), tensor_psnr(cover, steg_3), tensor_psnr(cover, steg_4)]
+                    secret_psnr_values = [tensor_psnr(secret_1, recovered_secret_1), tensor_psnr(secret_2, recovered_secret_2), tensor_psnr(secret_3, recovered_secret_3), tensor_psnr(secret_4, recovered_secret_4)]
+
+                    for history, value in zip(val_cover_psnr, cover_psnr_values):
+                        history.append(value)
+                    for history, value in zip(val_secret_psnr, secret_psnr_values):
+                        history.append(value)
+
+                    val_loop.set_postfix(C_S4=f"{cover_psnr_values[3]:.2f}", S1_R1=f"{secret_psnr_values[0]:.2f}", S2_R2=f"{secret_psnr_values[1]:.2f}", S3_R3=f"{secret_psnr_values[2]:.2f}", S4_R4=f"{secret_psnr_values[3]:.2f}")
+
+            avg_val_cover = [float(np.mean(history)) for history in val_cover_psnr]
+            avg_val_secret = [float(np.mean(history)) for history in val_secret_psnr]
+            current_val_psnr = float(np.mean(avg_val_secret))
+
+            log_to_file(f"  [Validation] C-S1: {avg_val_cover[0]:.2f} dB | C-S2: {avg_val_cover[1]:.2f} dB | C-S3: {avg_val_cover[2]:.2f} dB | C-S4: {avg_val_cover[3]:.2f} dB | S1-R1: {avg_val_secret[0]:.2f} dB | S2-R2: {avg_val_secret[1]:.2f} dB | S3-R3: {avg_val_secret[2]:.2f} dB | S4-R4: {avg_val_secret[3]:.2f} dB")
+
+            if current_val_psnr > best_psnr:
+                best_psnr = current_val_psnr
+                save_model(os.path.join(c.MODEL_PATH_4, "model_best_1.pt"), net1, optim1, i_epoch, best_psnr)
+                save_model(os.path.join(c.MODEL_PATH_4, "model_best_2.pt"), net2, optim2, i_epoch, best_psnr)
+                save_model(os.path.join(c.MODEL_PATH_4, "model_best_3.pt"), net3, optim3, i_epoch, best_psnr)
+                save_model(os.path.join(c.MODEL_PATH_4, "model_best_4.pt"), net4, optim4, i_epoch, best_psnr)
+                log_to_file("    [Info] Saved Best Models.")
+
+        epoch_end_datetime = datetime.datetime.now()
+        total_elapsed_seconds = time.time() - training_start_time
+        average_epoch_seconds = float(np.mean(completed_epoch_times))
+        remaining_epochs = max(c.epochs - i_epoch, 0)
+        estimated_finish_datetime = epoch_end_datetime + datetime.timedelta(seconds=average_epoch_seconds * remaining_epochs)
+
+        log_message = (
+            f"Epoch {i_epoch} Training Done.\n"
+            f"  [Loss] Total: {avg_loss:.4f} | G1: {avg_g[0]:.4f} | R1: {avg_r[0]:.4f} | LF1: {avg_lf[0]:.4f} | Z1: {avg_z[0]:.4f}\n"
+            f"         G2: {avg_g[1]:.4f} | R2: {avg_r[1]:.4f} | LF2: {avg_lf[1]:.4f} | Z2: {avg_z[1]:.4f}\n"
+            f"         G3: {avg_g[2]:.4f} | R3: {avg_r[2]:.4f} | LF3: {avg_lf[2]:.4f} | Z3: {avg_z[2]:.4f}\n"
+            f"         G4: {avg_g[3]:.4f} | R4: {avg_r[3]:.4f} | LF4: {avg_lf[3]:.4f} | Z4: {avg_z[3]:.4f}\n"
+            f"  [PSNR] C-S1: {avg_train_cover[0]:.2f} dB | C-S2: {avg_train_cover[1]:.2f} dB | C-S3: {avg_train_cover[2]:.2f} dB | C-S4: {avg_train_cover[3]:.2f} dB | S1-R1: {avg_train_secret[0]:.2f} dB | S2-R2: {avg_train_secret[1]:.2f} dB | S3-R3: {avg_train_secret[2]:.2f} dB | S4-R4: {avg_train_secret[3]:.2f} dB\n"
+            f"  [LR] Stage1: {optim1.param_groups[0]['lr']:.9f} | Stage2: {optim2.param_groups[0]['lr']:.9f} | Stage3: {optim3.param_groups[0]['lr']:.9f} | Stage4: {optim4.param_groups[0]['lr']:.9f}\n"
+            f"  [Time] Start: {epoch_start_datetime.strftime('%Y-%m-%d %H:%M:%S')} | End: {epoch_end_datetime.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"  [Elapsed] Epoch Train: {format_duration(epoch_train_seconds)} | Total: {format_duration(total_elapsed_seconds)} | Estimated Finish: {estimated_finish_datetime.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        log_to_file(log_message)
+
+        if i_epoch > 0 and i_epoch % c.save_freq == 0:
+            save_model(os.path.join(c.MODEL_PATH_4, f"model_checkpoint_{i_epoch:05d}_1.pt"), net1, optim1, i_epoch)
+            save_model(os.path.join(c.MODEL_PATH_4, f"model_checkpoint_{i_epoch:05d}_2.pt"), net2, optim2, i_epoch)
+            save_model(os.path.join(c.MODEL_PATH_4, f"model_checkpoint_{i_epoch:05d}_3.pt"), net3, optim3, i_epoch)
+            save_model(os.path.join(c.MODEL_PATH_4, f"model_checkpoint_{i_epoch:05d}_4.pt"), net4, optim4, i_epoch)
+
+        save_model(os.path.join(c.MODEL_PATH_4, "model_latest_1.pt"), net1, optim1, i_epoch, best_psnr)
+        save_model(os.path.join(c.MODEL_PATH_4, "model_latest_2.pt"), net2, optim2, i_epoch, best_psnr)
+        save_model(os.path.join(c.MODEL_PATH_4, "model_latest_3.pt"), net3, optim3, i_epoch, best_psnr)
+        save_model(os.path.join(c.MODEL_PATH_4, "model_latest_4.pt"), net4, optim4, i_epoch, best_psnr)
+
+        scheduler1.step()
+        scheduler2.step()
+        scheduler3.step()
+        scheduler4.step()
+
+    save_model(os.path.join(c.MODEL_PATH_4, "model_final_1.pt"), net1, optim1, c.epochs, best_psnr)
+    save_model(os.path.join(c.MODEL_PATH_4, "model_final_2.pt"), net2, optim2, c.epochs, best_psnr)
+    save_model(os.path.join(c.MODEL_PATH_4, "model_final_3.pt"), net3, optim3, c.epochs, best_psnr)
+    save_model(os.path.join(c.MODEL_PATH_4, "model_final_4.pt"), net4, optim4, c.epochs, best_psnr)
